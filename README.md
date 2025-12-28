@@ -976,8 +976,8 @@ in the Software without restriction...
 
 **Mohamed Fahfah**
 
-- GitHub: [@your-username](https://github.com/your-username)
-- Email: your.email@example.com
+- GitHub: [@FOL9](https://github.com/FOL9)
+- Email: rare69963@gmail.com
 
 ---
 
