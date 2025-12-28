@@ -101,7 +101,7 @@
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/your-username/sdx-agent.git
+   git clone https://github.com/FOL9/Agent_CLI.git
    cd sdx-agent
    ```
 
