@@ -95,3 +95,7 @@ You can install all of these dependencies at once by running:
 ```bash
 pip install -r requirements.txt
 ```
+
+## Author
+
+This project was created by Mohamed Fahfah.
