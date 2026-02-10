@@ -1,0 +1,8 @@
+[
+  {
+    "timestamp": "2026-02-10T12:08:17.739805",
+    "role": "user",
+    "content": "complete building this planner @my-next-app don't try npm run build add featur of ai planner using this modelso in this palnner i wanna from you make it power by ai @my-next-app/Models and remove that border frame @my-next-app/components/Planner.tsx  from it",
+    "metadata": {}
+  }
+]

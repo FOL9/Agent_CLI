@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-01-05T20:08:49.375655",
+    "role": "user",
+    "content": "give me tree of this dir",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:08:51.554828",
+    "role": "assistant",
+    "content": "The directory structure shows a Python project with modules, session files, logs, and `sshx_installer.sh`. What's next? Do you want file analysis, vulnerability checks, or another task?",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:24:04.171292",
+    "role": "user",
+    "content": "read file of this dir",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:24:05.791497",
+    "role": "assistant",
+    "content": "I've listed the files in the current directory. Please specify which file you'd like me to read.",
+    "metadata": {}
+  }
+]

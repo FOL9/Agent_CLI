@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2026-02-10T14:40:26.111908",
+    "role": "user",
+    "content": "whats my name",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-02-10T14:41:33.049618",
+    "role": "user",
+    "content": "upgrade ui of this file @index.html",
+    "metadata": {}
+  }
+]

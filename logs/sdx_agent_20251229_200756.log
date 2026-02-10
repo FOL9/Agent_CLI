@@ -1,0 +1,7 @@
+2025-12-29 20:07:56,998 - SDXAgent - INFO - SDX Agent initializing...
+2025-12-29 20:07:57,172 - SDXAgent - INFO - SDX Agent started in interactive mode
+2025-12-29 20:10:11,664 - SDXAgent - INFO - Request processed successfully
+2025-12-29 20:11:27,240 - SDXAgent - INFO - Request processed successfully
+2025-12-29 20:25:55,361 - SDXAgent - ERROR - Error processing request: [Errno 2] No such file or directory: '/home/user/agent/templates'
+2025-12-29 20:33:58,701 - SDXAgent - INFO - Request processed successfully
+2025-12-29 20:35:58,123 - SDXAgent - INFO - Agent session interrupted by user

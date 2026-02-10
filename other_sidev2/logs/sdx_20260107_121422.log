@@ -1,0 +1,2 @@
+2026-01-07 12:14:22,542 - INFO - SDX Agent started
+2026-01-07 12:15:22,450 - ERROR - Error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'The model is overloaded. Please try again later.', 'status': 'UNAVAILABLE'}}

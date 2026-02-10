@@ -1,0 +1,2 @@
+2026-01-07 20:48:14,310 - INFO - SDX Agent started
+2026-01-07 20:52:06,031 - ERROR - Error: Unable to render None; A str, Segment or object with __rich_console__ method is required

@@ -1,0 +1,20 @@
+[
+  {
+    "timestamp": "2026-01-05T20:39:00.201730",
+    "role": "user",
+    "content": "reade files of this dir and what you think",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:40:12.401481",
+    "role": "user",
+    "content": "hey i have this website of next js rqaiq-sass.vercel.app and i give you all access to get bugs",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:40:17.601596",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  }
+]

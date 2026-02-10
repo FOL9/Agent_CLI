@@ -1,0 +1,4 @@
+2026-01-06 12:47:15,738 - SDXAgent - INFO - SDX Agent initializing...
+2026-01-06 12:47:15,883 - SDXAgent - INFO - SDX Agent started in interactive mode
+2026-01-06 12:47:58,382 - SDXAgent - ERROR - Error processing request: get_files_info() missing 1 required positional argument: 'working_directory'
+2026-01-06 12:48:02,599 - SDXAgent - INFO - Agent session interrupted by user

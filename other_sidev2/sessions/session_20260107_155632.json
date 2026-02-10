@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-01-07T15:57:29.674945",
+    "role": "user",
+    "content": "read  files in folder /func and give me report in tabel or tree",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T15:57:31.688909",
+    "role": "assistant",
+    "content": "Access denied. I can only access files within the working directory. Please provide a path relative to the current directory (e.g., '.', 'src', '../').",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T15:58:09.187882",
+    "role": "user",
+    "content": "in same dir read /func and give me tabel report or tree",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T15:58:10.634752",
+    "role": "assistant",
+    "content": "Access denied. I can only access the current working directory and its subdirectories. Please provide a path within the working directory.",
+    "metadata": {}
+  }
+]

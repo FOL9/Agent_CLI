@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2026-01-07T15:19:59.990425",
+    "role": "user",
+    "content": "read file /home/user/agent/other_sidev2/tools/CVE-2025-55182/README.md and give me deagrama of working",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T15:20:04.099442",
+    "role": "assistant",
+    "content": "The `CVE-2025-55182` exploit works by leveraging a prototype pollution vulnerability in Next.js React Server Components to achieve remote code execution.\n\nHere's a breakdown of the workflow:\n\n1.  **Vulnerability**: The exploit targets a prototype pollution flaw within Next.js React Server Components. This vulnerability allows an attacker to inject arbitrary properties into JavaScript object prototypes.\n\n2.  **Exploitation**:\n    *   **Command Execution**: The `exploit.py` script sends a specially crafted request to the vulnerable Next.js application. This request, when processed by the server, uses the prototype pollution to inject malicious code (specified by the `-c` or `--cmd` argument) into a context where it will be executed by the server.\n    *   **Reverse Shell**: For a reverse shell, the script injects a payload that causes the vulnerable server to initiate a connection back to a specified listener (`-l` or `--lhost` and `-p` or `--lport`). Various payload types (`nc`, `nc-mkfifo`, `sh`, `perl`) are supported to adapt to different target environments.\n\n3.  **Impact**: Successful exploitation leads to remote code execution on the server hosting the Next.js application, allowing the attacker to run arbitrary commands or establish a persistent reverse shell.\n\n**Diagram of Working:**\n\n```\n[Attacker Machine]\n    |\n    | (1. Sends crafted request with malicious payload)\n    V\n[Vulnerable Next.js Application Server]\n    |\n    | (2. Processes request, prototype pollution occurs)\n    V\n[React Server Components Runtime]\n    |\n    | (3. Malicious code is injected and executed)\n    V\n[Server Operating System]\n    |\n    | (4. Command executed / Reverse shell established)\n    V\n[Attacker Machine] <------------------------------------- (5. Reverse shell connection)\n```",
+    "metadata": {}
+  }
+]

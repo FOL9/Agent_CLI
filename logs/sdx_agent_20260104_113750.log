@@ -1,0 +1,6 @@
+2026-01-04 11:37:50,033 - SDXAgent - INFO - SDX Agent initializing with shell execution capabilities...
+2026-01-04 11:37:50,219 - SDXAgent - INFO - SDX Agent started in interactive mode with shell execution
+2026-01-04 11:38:37,230 - SDXAgent - ERROR - Error processing request: get_files_info() missing 1 required positional argument: 'working_directory'
+2026-01-04 11:39:23,540 - SDXAgent - ERROR - Error processing request: get_files_info() missing 1 required positional argument: 'working_directory'
+2026-01-04 11:39:32,830 - SDXAgent - INFO - Request processed successfully
+2026-01-04 11:40:44,206 - SDXAgent - INFO - Agent session ended gracefully

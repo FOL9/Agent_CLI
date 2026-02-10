@@ -1,0 +1,20 @@
+[
+  {
+    "timestamp": "2026-01-05T20:00:49.646282",
+    "role": "user",
+    "content": "read all files of this other_side and give me report of this project",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:00:51.896879",
+    "role": "assistant",
+    "content": "I cannot find a directory named `other_side`. Please ensure the directory exists and that the path is correct. If it's located elsewhere, provide the correct relative or absolute path to it.",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-05T20:01:24.903374",
+    "role": "user",
+    "content": "\u2192 read all files of this dir and give me report of this project",
+    "metadata": {}
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "timestamp": "2026-01-06T20:12:04.845201",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-06T20:12:05.728184",
+    "role": "assistant",
+    "content": "Hello! How can I help you today?",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-06T20:12:45.160386",
+    "role": "user",
+    "content": "scan network and give me deagrama of working scan",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-06T20:12:49.869357",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-06T20:12:50.969293",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-06T20:12:51.880659",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  }
+]

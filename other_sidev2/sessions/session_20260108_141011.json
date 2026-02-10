@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-01-08T14:10:13.680172",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-08T14:10:26.816298",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-08T14:10:28.984100",
+    "role": "assistant",
+    "content": "Hello, I am a cybersecurity expert and senior software engineer. How may I help you today?\n",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-08T14:10:55.336940",
+    "role": "user",
+    "content": "read package.json then tell me what in it",
+    "metadata": {}
+  }
+]

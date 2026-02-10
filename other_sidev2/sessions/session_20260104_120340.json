@@ -1,0 +1,32 @@
+[
+  {
+    "timestamp": "2026-01-04T12:05:21.564402",
+    "role": "user",
+    "content": "hey i'm build for you api called run_shell so you now as software eng and programer and bug hunter you can to do any thing in this vm to test just see me , so just for test",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-04T12:05:24.879382",
+    "role": "assistant",
+    "content": null,
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-04T12:05:55.506052",
+    "role": "user",
+    "content": "read all files of this vm",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-04T12:06:15.259946",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-04T13:00:21.170849",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  }
+]

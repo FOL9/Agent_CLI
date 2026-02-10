@@ -1,1 +1,11 @@
-README.md
+# Environment variables
+.env
+
+# Python version
+.python-version
+
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/

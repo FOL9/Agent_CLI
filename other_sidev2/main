@@ -1,0 +1,753 @@
+"""
+SDX Agent - Modern CLI with Claude-style UI Features
+Enhanced with: Framed command boxes, fixed input, task tracking, real-time status
+"""
+
+import os
+import sys
+import json
+import logging
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from enum import Enum
+from dotenv import load_dotenv
+
+from google import genai
+from google.genai import types
+
+# APIs
+from func.stealth_scanner import schema_stealth_scan
+from func.parameter_hunter import schema_hunt_parameters
+from func.get_files_info import schema_get_files_info
+from func.get_file_content import schema_get_file_content
+from func.write_file import schema_write_file
+from func.run_python_file import schema_run_python_file
+from func.run_shell import schema_run_shell
+from func.make_http_request import schema_make_http_request
+from func.enumerate_subdomains import schema_enumerate_subdomains
+from func.scan_ports import schema_scan_ports
+from call_function import call_function
+
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.syntax import Syntax
+from rich import box
+from rich.align import Align
+from rich.columns import Columns
+from rich.layout import Layout
+from rich.live import Live
+from rich.logging import RichHandler
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+from rich.progress import Progress, SpinnerColumn, TextColumn
+
+
+# ============================================================================
+# TASK & STATE MANAGEMENT
+# ============================================================================
+
+class TaskStatus(Enum):
+    """Task execution status"""
+    PENDING = "○"
+    IN_PROGRESS = "◐"
+    COMPLETED = "●"
+    FAILED = "✗"
+
+
+class Task:
+    """Represents a task/step in execution"""
+    
+    def __init__(self, title: str, description: str = ""):
+        self.title = title
+        self.description = description
+        self.status = TaskStatus.PENDING
+        self.timestamp = datetime.now()
+        self.duration = 0.0
+        self.result = None
+    
+    def start(self):
+        self.status = TaskStatus.IN_PROGRESS
+        self.timestamp = datetime.now()
+    
+    def complete(self, result: Any = None):
+        self.status = TaskStatus.COMPLETED
+        self.duration = (datetime.now() - self.timestamp).total_seconds()
+        self.result = result
+    
+    def fail(self, error: str = ""):
+        self.status = TaskStatus.FAILED
+        self.duration = (datetime.now() - self.timestamp).total_seconds()
+        self.result = error
+    
+    def to_rich_text(self, theme: 'ModernTheme') -> Text:
+        """Convert task to rich Text object for display"""
+        t = Text()
+        
+        # Status indicator with color
+        status_colors = {
+            TaskStatus.PENDING: theme.TEXT_SECONDARY,
+            TaskStatus.IN_PROGRESS: theme.PRIMARY,
+            TaskStatus.COMPLETED: theme.SUCCESS,
+            TaskStatus.FAILED: theme.ERROR,
+        }
+        color = status_colors.get(self.status, theme.TEXT_SECONDARY)
+        
+        t.append(f" {self.status.value} ", style=f"bold {color}")
+        t.append(self.title, style=theme.TEXT_PRIMARY)
+        
+        if self.description:
+            t.append(f" — {self.description}", style=f"dim {theme.TEXT_SECONDARY}")
+        
+        if self.status == TaskStatus.COMPLETED:
+            t.append(f" ({self.duration:.2f}s)", style=f"dim {theme.TEXT_SECONDARY}")
+        
+        return t
+
+
+class TaskManager:
+    """Manages task list and execution tracking"""
+    
+    def __init__(self, max_tasks: int = 10):
+        self.tasks: List[Task] = []
+        self.max_tasks = max_tasks
+        self.active_task_id: Optional[int] = None
+    
+    def add_task(self, title: str, description: str = "") -> int:
+        """Add a task and return its ID"""
+        if len(self.tasks) >= self.max_tasks:
+            self.tasks.pop(0)  # Remove oldest
+        
+        task = Task(title, description)
+        self.tasks.append(task)
+        return len(self.tasks) - 1
+    
+    def start_task(self, task_id: int):
+        if 0 <= task_id < len(self.tasks):
+            self.tasks[task_id].start()
+            self.active_task_id = task_id
+    
+    def complete_task(self, task_id: int, result: Any = None):
+        if 0 <= task_id < len(self.tasks):
+            self.tasks[task_id].complete(result)
+    
+    def fail_task(self, task_id: int, error: str = ""):
+        if 0 <= task_id < len(self.tasks):
+            self.tasks[task_id].fail(error)
+    
+    def get_active_tasks(self) -> List[Task]:
+        """Return only pending and in-progress tasks"""
+        return [t for t in self.tasks if t.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)]
+    
+    def clear(self):
+        self.tasks = []
+        self.active_task_id = None
+
+
+# ============================================================================
+# MODERN THEME & STYLING
+# ============================================================================
+
+class ModernTheme:
+    """Theme matching Claude Code CLI style"""
+    
+    PRIMARY = "#F2A07B"         # Burnt Orange
+    SECONDARY = "#9CA3AF"       # Light Gray
+    ACCENT = "#D95F3B"          # Orange for focus
+    
+    SUCCESS = "#D95F3B"         # Orange
+    ERROR = "#EF4444"           # Red
+    WARNING = "#F59E0B"         # Amber
+    
+    BG_DARK = "#000000"
+    TEXT_PRIMARY = "#E5E7EB"
+    TEXT_SECONDARY = "#6B7280"
+    TEXT_DIM = "#4B5563"
+    
+    # Frame colors
+    FRAME_COMMAND = "#B084CC"   # Purple for bash commands
+    FRAME_THINKING = PRIMARY     # Orange for thinking
+    FRAME_RESULT = "#10B981"    # Green for results
+    
+    ICON_STAR = "✻"
+    ICON_ARROW = "❯"
+    ICON_COMMAND = "$"
+    ICON_THINKING = "○"
+
+
+# ============================================================================
+# MODERN SPINNER
+# ============================================================================
+
+class ModernSpinner:
+    """Minimalist spinner matching the theme"""
+    
+    FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    
+    def __init__(self, message: str = "Processing", color: str = ModernTheme):
+        self.message = message
+        self.color = color
+        self.running = False
+        self.thread = None
+        self._frame_index = 0
+        self.console = Console()
+    
+    def _animate(self):
+        while self.running:
+            frame = self.FRAMES[self._frame_index % len(self.FRAMES)]
+            status_msg = f"\r{frame} {self.message}..."
+            self.console.file.write(status_msg + " " * 20)
+            self.console.file.flush()
+            self._frame_index += 1
+            time.sleep(0.08)
+    
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._animate, daemon=True)
+            self.thread.start()
+    
+    def stop(self, success: bool = True):
+        if self.running:
+            self.running = False
+            if self.thread:
+                self.thread.join(timeout=0.2)
+            sys.stdout.write('\r' + ' ' * 80 + '\r')
+            sys.stdout.flush()
+
+
+# ============================================================================
+# LOGGER
+# ============================================================================
+
+class Logger:
+    """Modern logging system"""
+    
+    def __init__(self, log_dir: str = "logs"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(exist_ok=True)
+        self.monitoring_enabled = False
+        
+        log_file = self.log_dir / f"sdx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(log_file)]
+        )
+        self.logger = logging.getLogger("SDX")
+        self._set_external_logging(False)
+    
+    def enable_monitoring(self):
+        self.monitoring_enabled = True
+        self._set_external_logging(True)
+    
+    def disable_monitoring(self):
+        self.monitoring_enabled = False
+        self._set_external_logging(False)
+    
+    def _set_external_logging(self, enabled: bool):
+        level = logging.INFO if enabled else logging.WARNING
+        logging.getLogger("google_genai").setLevel(level)
+        logging.getLogger("httpx").setLevel(level)
+    
+    def info(self, msg: str):
+        self.logger.info(msg)
+    
+    def error(self, msg: str):
+        self.logger.error(msg)
+    
+    def warning(self, msg: str):
+        self.logger.warning(msg)
+
+
+# ============================================================================
+# SESSION MANAGEMENT
+# ============================================================================
+
+class SessionManager:
+    """Manages chat history and session state"""
+    
+    def __init__(self, session_dir: str = "sessions"):
+        self.session_dir = Path(session_dir)
+        self.session_dir.mkdir(exist_ok=True)
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.session_dir / f"session_{self.session_id}.json"
+        self.history: List[Dict[str, Any]] = []
+        self.load_history()
+    
+    def add_message(self, role: str, content: str, metadata: Optional[Dict] = None):
+        message = {
+            "timestamp": datetime.now().isoformat(),
+            "role": role,
+            "content": content,
+            "metadata": metadata or {}
+        }
+        self.history.append(message)
+        self.save_history()
+    
+    def save_history(self):
+        with open(self.session_file, 'w') as f:
+            json.dump(self.history, f, indent=2)
+    
+    def load_history(self):
+        if self.session_file.exists():
+            try:
+                with open(self.session_file, 'r') as f:
+                    self.history = json.load(f)
+            except Exception:
+                self.history = []
+    
+    def clear_history(self):
+        self.history = []
+        self.save_history()
+
+
+# ============================================================================
+# COMMAND HANDLER
+# ============================================================================
+
+class CommandHandler:
+    """Handles CLI commands"""
+    
+    COMMANDS = {
+        'help': 'Show available commands',
+        'history': 'View chat history',
+        'clear': 'Clear session history',
+        'status': 'Show system status',
+        'monitor': 'Toggle monitoring mode',
+        'exit': 'Exit the agent',
+    }
+    
+    def __init__(self, session: SessionManager, logger: Logger):
+        self.session = session
+        self.logger = logger
+        self.console = Console()
+    
+    def is_command(self, text: str) -> bool:
+        cmd = text.lower().strip().lstrip('/')
+        return cmd in self.COMMANDS or text.startswith('/')
+    
+    def handle(self, text: str) -> Optional[str]:
+        cmd = text.lower().strip().lstrip('/')
+        
+        if cmd in ['exit', 'quit', 'q']:
+            return "EXIT"
+        
+        if cmd == 'help':
+            return self._show_help()
+        
+        if cmd == 'history':
+            return self._show_history()
+        
+        if cmd == 'clear':
+            self.session.clear_history()
+            return "History cleared"
+        
+        if cmd == 'status':
+            return self._show_status()
+        
+        if cmd == 'monitor':
+            if self.logger.monitoring_enabled:
+                self.logger.disable_monitoring()
+                return "Monitoring disabled"
+            else:
+                self.logger.enable_monitoring()
+                return "Monitoring enabled"
+        
+        return None
+    
+    def _show_help(self) -> str:
+        text = Text()
+        for cmd, desc in self.COMMANDS.items():
+            text.append(f"/{cmd:<10}", style=f"bold {ModernTheme.PRIMARY}")
+            text.append(f"{desc}\n", style=ModernTheme.TEXT_SECONDARY)
+        return text
+    
+    def _show_history(self) -> str:
+        if not self.session.history:
+            return "No history available"
+        
+        history = []
+        for msg in self.session.history[-5:]:
+            role = "AI" if msg['role'] == 'assistant' else "You"
+            content = msg['content'][:80] + "..." if len(msg['content']) > 80 else msg['content']
+            history.append(f"{role}: {content}")
+        
+        return "\n".join(history)
+    
+    def _show_status(self) -> str:
+        cwd = os.getcwd()
+        monitor = "ON" if self.logger.monitoring_enabled else "OFF"
+        return f"Dir: {cwd}\nMonitor: {monitor}\nSession: {self.session.session_id}"
+
+
+# ============================================================================
+# MODERN UI WITH CLAUDE-STYLE FEATURES
+# ============================================================================
+
+class FramedBox:
+    """Renders framed boxes like in Claude CLI"""
+    
+    def __init__(self, title: str = "", border_color: str = ModernTheme.PRIMARY, width: int = 80):
+        self.title = title
+        self.border_color = border_color
+        self.width = width
+        self.console = Console()
+    
+    def render(self, content: str):
+        """Render a framed box with title"""
+        panel = Panel(
+            content,
+            title=self.title,
+            border_style=self.border_color,
+            box=box.ROUNDED,
+            padding=(1, 2),
+            width=self.width,
+            expand=True
+        )
+        self.console.print(panel)
+
+
+class ModernUI:
+    """UI matching Claude Code CLI style"""
+    
+    def __init__(self):
+        self.console = Console()
+        self.task_manager = TaskManager()
+    
+    def clear(self):
+        self.console.clear()
+    
+    def welcome_screen(self):
+        """Welcome screen with framed layout"""
+        self.clear()
+        
+        cwd = os.getcwd()
+        
+        welcome_text = Text()
+        welcome_text.append(f"{ModernTheme.ICON_STAR} Welcome to SDX Agent!\n\n", style=f"bold {ModernTheme.TEXT_PRIMARY}")
+        welcome_text.append("/help for help, /status for your current setup\n\n", style=f"italic {ModernTheme.TEXT_SECONDARY}")
+        welcome_text.append(f"CWD: {cwd}", style=f"italic {ModernTheme.TEXT_SECONDARY}")
+        
+        welcome_panel = Panel(
+            welcome_text,
+            border_style=ModernTheme.PRIMARY,
+            box=box.ROUNDED,
+            padding=(1, 2),
+            width=200,
+            expand=True
+        )
+        
+        self.console.print(welcome_panel)
+        self.console.print()
+        
+        self.console.print("Can you ask me to help you:", style=f"{ModernTheme.TEXT_SECONDARY}")
+        self.console.print()
+        
+        tips = [
+            "- Ask SDX to create a new app or clone a repository",
+            "- Use SDX to help with file analysis, editing, bash commands and git",
+            "- Be as specific as you would with another engineer for the best results"
+        ]
+        
+        for tip in tips:
+            self.console.print(tip, style=f"italic {ModernTheme.TEXT_SECONDARY}")
+        
+        self.console.print()
+    
+    def display_prompt(self):
+        """Display the bottom input prompt like Claude CLI"""
+        self.console.print("  Ask ──────────────────────────────────────────────────────────", 
+                          style=f"dim {ModernTheme.TEXT_SECONDARY}")
+        self.console.print(f" {ModernTheme.ICON_ARROW} ", style=f"bold {ModernTheme.PRIMARY}", end="")
+    
+
+    def display_thinking_frame(self, content: str):
+        """Display thinking/processing in orange frame"""
+        frame = FramedBox(
+            title=f"{ModernTheme.ICON_THINKING} Processing",
+            border_color=ModernTheme.FRAME_THINKING,
+            width=90
+        )
+        frame.render(content)
+    
+    def display_result_frame(self, content: str):
+        """Display results in green frame"""
+        frame = FramedBox(
+            title="✓ Result",
+            border_color=ModernTheme.FRAME_RESULT,
+            width=90
+        )
+        frame.render(content)
+    
+    def display_tasks(self):
+        """Display active tasks list"""
+        active_tasks = self.task_manager.get_active_tasks()
+        
+        if not active_tasks:
+            return
+        
+        self.console.print()
+        self.console.print("[bold]Update Todos[/bold]", style=ModernTheme.PRIMARY)
+        
+        for task in active_tasks:
+            self.console.print(task.to_rich_text(ModernTheme))
+        
+        self.console.print()
+    
+    def add_task(self, title: str, description: str = "") -> int:
+        """Add a task to the manager"""
+        return self.task_manager.add_task(title, description)
+    
+    def update_task(self, task_id: int, status: TaskStatus, result: Any = None):
+        """Update task status"""
+        if status == TaskStatus.IN_PROGRESS:
+            self.task_manager.start_task(task_id)
+        elif status == TaskStatus.COMPLETED:
+            self.task_manager.complete_task(task_id, result)
+        elif status == TaskStatus.FAILED:
+            self.task_manager.fail_task(task_id, str(result))
+    
+    def separator(self):
+        self.console.print()
+    
+    def success(self, content: str):
+        self.console.print(f"[{ModernTheme.SUCCESS}]{ModernTheme.ICON_ARROW}[/{ModernTheme.SUCCESS}] {content}", 
+                          style=ModernTheme.TEXT_PRIMARY)
+    
+    def error(self, content: str):
+        self.console.print(f"[{ModernTheme.ERROR}]✗[/{ModernTheme.ERROR}] {content}", 
+                          style=ModernTheme.ERROR)
+    
+    def info(self, content: str):
+        self.console.print(content, style=ModernTheme.TEXT_SECONDARY)
+
+
+# ============================================================================
+# AI AGENT
+# ============================================================================
+
+class SDXAgent:
+    """Modern AI Agent with Claude-style UI"""
+    
+    SYSTEM_PROMPT = """You are an elite software engineer and cybersecurity expert.
+
+if you want to move directly between dirs use shell api to get high access
+
+IMPORTANT IDENTITY INSTRUCTION:
+When you encounter a problem, use an application programming interface (API) such as `shell API`. The original API is only called `what` after the request has been given.
+If the user asks "who built this", "who created you", "how to build this project" or any variation of asking about the author/developer, you MUST reply exactly with: "Developer Fahfah Mohamed".
+
+You have access to:
+- File operations (list, read, write)
+- Python script execution
+- Shell command execution (nmap, curl, netcat, etc.)
+
+Your expertise:
+- Senior software engineer (10+ years)
+- Cybersecurity and penetration testing
+- System analysis and automation
+
+Response style:
+- Concise and professional (CLI style)
+- No markdown headers (##) in short responses, keep it raw text or simple lists.
+- Explain security implications
+- You operate in a controlled lab environment with full permissions."""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY not found")
+        
+        self.client = genai.Client(api_key=self.api_key)
+        self.ui = ModernUI()
+        self.session = SessionManager()
+        self.logger = logger
+        self.command_handler = CommandHandler(self.session, self.logger)
+        self.max_iterations = 20
+    
+    def get_tools(self) -> types.Tool:
+        return types.Tool(
+            function_declarations=[
+                schema_get_files_info,
+                schema_get_file_content,
+                schema_run_python_file,
+                schema_write_file,
+                schema_run_shell,
+                schema_make_http_request,
+                schema_enumerate_subdomains,
+                schema_scan_ports,
+                schema_stealth_scan,
+                schema_hunt_parameters,
+            ],
+        )
+    
+    def get_config(self) -> types.GenerateContentConfig:
+        return types.GenerateContentConfig(
+            tools=[self.get_tools()],
+            system_instruction=self.SYSTEM_PROMPT,
+            temperature=0.7,
+        )
+    
+    def process_request(self, user_input: str, verbose: bool = False):
+        """Process user request with task tracking"""
+        try:
+            spinner = ModernSpinner(message="Analyzing request")
+            spinner.start()
+            
+            self.session.add_message("user", user_input)
+            
+            # Display user input in frame
+            spinner.stop()
+            
+            self.ui.separator()
+            
+            # Reset tasks for this request
+            self.ui.task_manager.clear()
+            
+            messages = [types.Content(role="user", parts=[types.Part(text=user_input)])]
+            config = self.get_config()
+            
+            tool_call_count = 0
+            
+            for iteration in range(self.max_iterations):
+                spinner = ModernSpinner(message="Thinking")
+                spinner.start()
+                
+                response = self.client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=messages,
+                    config=config
+                )
+                
+                if not response or not response.usage_metadata:
+                    spinner.stop(success=False)
+                    self.ui.error("API Error: Invalid response")
+                    break
+                
+                if response.candidates:
+                    for candidate in response.candidates:
+                        if candidate and candidate.content:
+                            messages.append(candidate.content)
+                    
+                    if response.function_calls:
+                        spinner.stop()
+                        
+                        # Show thinking frame
+                        self.ui.display_thinking_frame(f"Executing {len(response.function_calls)} tool(s)...")
+                        self.ui.separator()
+                        
+                        # Execute tools with task tracking
+                        for idx, function_call in enumerate(response.function_calls):
+                            tool_call_count += 1
+                            tool_name = function_call.name
+                            
+                            # Add task
+                            task_id = self.ui.add_task(
+                                f"Execute {tool_name}",
+                                f"Running: {function_call.name}"
+                            )
+                            self.ui.update_task(task_id, TaskStatus.IN_PROGRESS)
+                            self.ui.display_tasks()
+                            
+                            # Run function
+                            result = call_function(function_call, verbose)
+                            messages.append(result)
+                            
+                            # Mark complete
+                            self.ui.update_task(task_id, TaskStatus.COMPLETED)
+                            self.ui.display_tasks()
+                    else:
+                        spinner.stop()
+                        response_text = response.text
+                        self.session.add_message("assistant", response_text)
+                        
+                        # Display result
+                        self.ui.display_result_frame(response_text)
+                        self.ui.separator()
+                        break
+            else:
+                spinner.stop(success=False)
+                self.ui.error("Max iterations reached")
+        
+        except Exception as e:
+            if 'spinner' in locals():
+                spinner.stop(success=False)
+            self.ui.error(f"Error: {str(e)}")
+            self.logger.error(f"Error: {e}")
+    
+    def run_interactive(self):
+        """Run in interactive mode with modern UI"""
+        self.ui.welcome_screen()
+        self.logger.info("SDX Agent started")
+        
+        while True:
+            try:
+                self.ui.display_prompt()
+                user_input = input().strip()
+                self.ui.separator()
+                
+                if not user_input:
+                    continue
+                
+                if self.command_handler.is_command(user_input):
+                    result = self.command_handler.handle(user_input)
+                    if result == "EXIT":
+                        break
+                    elif result:
+                        self.ui.info(str(result))
+                        self.ui.separator()
+                    continue
+                
+                verbose_flag = '--verbose' in user_input
+                if verbose_flag:
+                    user_input = user_input.replace('--verbose', '').strip()
+                
+                self.process_request(user_input, verbose_flag)
+                self.ui.separator()
+                self.ui.info("[dim]? for shortcuts[/dim]")
+                self.ui.separator()
+            
+            except KeyboardInterrupt:
+                self.ui.separator()
+                self.ui.info("Interrupted.")
+                break
+            except Exception as e:
+                self.ui.error(f"Unexpected Error: {str(e)}")
+
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
+
+logger = None
+
+
+def main():
+    global logger
+    
+    load_dotenv()
+    logger = Logger()
+    
+    try:
+        agent = SDXAgent()
+        agent.run_interactive()
+    
+    except ValueError as e:
+        console = Console()
+        console.print(f"[red]Configuration Error: {e}[/red]")
+        sys.exit(1)
+    
+    except Exception as e:
+        console = Console()
+        console.print(f"[red]Fatal Error: {e}[/red]")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

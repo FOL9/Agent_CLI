@@ -1,0 +1,15 @@
+{
+    
+    "vercel-skills": {
+      "path" : "~/.agent/other_side",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@vercel/agent-skills"
+      ],
+      "env": {
+        "VERCEL_TOKEN": ""
+      },
+      "description": "Vercel deployment and project management"
+    }
+}

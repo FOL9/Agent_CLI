@@ -1,0 +1,2 @@
+2026-01-05 21:50:25,457 - INFO - SDX Agent started
+2026-01-05 21:50:28,078 - ERROR - Error: 'ascii' codec can't encode character '\u200f' in position 39: ordinal not in range(128)

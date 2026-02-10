@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2026-01-07T20:09:07.599918",
+    "role": "user",
+    "content": "hi",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T20:09:09.281695",
+    "role": "assistant",
+    "content": "Hello! I'm an elite software engineer and cybersecurity expert. How can I help you today? I see you have a number of files in your current directory.",
+    "metadata": {}
+  }
+]

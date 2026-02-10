@@ -1,0 +1,126 @@
+import os
+from google.genai import types
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
+console = Console()
+
+def call_function(function_call: types.FunctionCall, verbose: bool = False) -> types.Content:
+    """
+    Route function calls to appropriate handlers with live CLI display.
+    
+    Args:
+        function_call: The function call object from the AI
+        verbose: Whether to display verbose output
+    
+    Returns:
+        Content object with function response
+    """
+    function_name = function_call.name
+    args = function_call.args
+    working_directory = os.getcwd()
+    
+    # Show function call info (always show for commands)
+    if function_name in ['run_shell', 'run_python_file']:
+        # For execution commands, show minimal header
+        console.print()
+    elif verbose or function_name in ['get_files_info', 'get_file_content', 'write_file']:
+        # For other functions, show what's happening
+        action_text = Text()
+        if function_name == "get_files_info":
+            path = args.get("path", ".")
+            recursive = args.get("recursive", False)
+            action = "Listing files recursively" if recursive else "Listing files"
+            action_text.append(f"{action} in: ", style="cyan")
+            action_text.append(path, style="yellow bold")
+        elif function_name == "get_file_content":
+            action_text.append("Reading file: ", style="cyan")
+            action_text.append(args.get("file_path"), style="yellow bold")
+        elif function_name == "write_file":
+            action_text.append("Writing file: ", style="cyan")
+            action_text.append(args.get("file_path"), style="yellow bold")
+        else:
+            action_text.append(f"Calling: {function_name}", style="cyan")
+        
+        console.print(Panel(
+            action_text,
+            border_style="cyan",
+            padding=(0, 2)
+        ))
+    
+    # Import functions locally to avoid circular imports
+    try:
+        # Route to appropriate function
+        if function_name == "get_files_info":
+            from func.get_files_info import get_files_info
+            result = get_files_info(
+                working_directory,
+                path=args.get("path", "."),
+                recursive=args.get("recursive", False)
+            )
+            # Show result for file listings
+            console.print(f"[dim]{result}[/dim]\n")
+        
+        elif function_name == "get_file_content":
+            from func.get_file_content import get_file_content
+            result = get_file_content(
+                working_directory,
+                file_path=args.get("file_path")
+            )
+            # Show snippet of file content
+            lines = result.split('\n')
+            if len(lines) > 20:
+                preview = '\n'.join(lines[:20]) + f"\n[dim]... ({len(lines)} total lines)[/dim]"
+            else:
+                preview = result
+            console.print(f"[dim]{preview}[/dim]\n")
+        
+        elif function_name == "write_file":
+            from func.write_file import write_file
+            result = write_file(
+                working_directory,
+                file_path=args.get("file_path"),
+                content=args.get("content")
+            )
+            console.print(f"[green]{result}[/green]\n")
+        
+        elif function_name == "run_python_file":
+            from func.run_python_file import run_python_file
+            result = run_python_file(
+                working_directory,
+                file_path=args.get("file_path"),
+                args=args.get("args", [])
+            )
+            # Live output is already shown by the function itself
+        
+        elif function_name == "run_shell":
+            from func.run_shell import run_shell
+            result = run_shell(
+                working_directory,
+                command=args.get("command"),
+                timeout=args.get("timeout", 30)
+            )
+            # Live output is already shown by the function itself
+        
+        else:
+            result = f"Error: Unknown function '{function_name}'"
+            console.print(f"[red]{result}[/red]\n")
+    
+    except Exception as e:
+        result = f"Error executing {function_name}: {str(e)}"
+        console.print(f"[red bold]✗ {result}[/red bold]\n")
+    
+    # Return as Content object
+    return types.Content(
+        role="user",
+        parts=[
+            types.Part(
+                function_response=types.FunctionResponse(
+                    name=function_name,
+                    response={"result": result}
+                )
+            )
+        ]
+    )

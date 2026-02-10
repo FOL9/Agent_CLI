@@ -30,4 +30,3 @@ def get_files_info(working_directory :str , directory=".") :
         final_responce += f'- {content:<15} size: {size} bytes  is_dir: {isdir}\n'
     return final_responce 
 
-

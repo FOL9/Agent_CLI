@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2026-01-07T20:51:45.756763",
+    "role": "user",
+    "content": "hey with api shell work , so i wanna from you read file server.py inside dir mcp_server then create in same dir mcp_server frontend using flask and html all in same file for that server.py to use pcm agent",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-01-07T20:52:06.026633",
+    "role": "assistant",
+    "content": null,
+    "metadata": {}
+  }
+]
