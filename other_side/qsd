@@ -1,0 +1,19 @@
+🧠 Session Summary —                تلخيص ذكي لحالة الجلسة بدل تخزين المحادثة كاملة
+
+📁 Project Memory —                   حفظ معلومات ثابتة عن المشروع (build, test, structure)
+ 
+🔁 Auto Summarization —       تحديث تلقائي للذاكرة كل عدة خطوات
+
+🎯 Context Injection Smart —               إدخال فقط المعلومات المرتبطة بالمهمة الحالية
+
+📚 Knowledge Extraction —               استخراج الأنماط والمعلومات المتكررة تلقائيًا
+
+⏪ Checkpoint Support —           إمكانية الرجوع لنقطة سابقة في الجلسة
+
+🧩 Isolated Task Memory —               عزل ذاكرة كل مهمة لمنع تلوث السياق
+
+💾 Persistent Storage —               تخزين دائم داخل .sdx/memory/
+        
+⚡ Token Optimization —           تقليل استهلاك التوكنز عبر التلخيص
+                         
+حذف أو تقليل أهمية المعلومات القديمة

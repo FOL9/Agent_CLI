@@ -1,0 +1,14 @@
+[
+  {
+    "timestamp": "2026-02-26T15:22:00.742759",
+    "role": "user",
+    "content": "this is your palce working @test/",
+    "metadata": {}
+  },
+  {
+    "timestamp": "2026-02-26T15:22:44.586631",
+    "role": "user",
+    "content": "this is your palce working @test/ so read @test/.md and try to builed file html virtaulize that @test/.tsx in ui",
+    "metadata": {}
+  }
+]

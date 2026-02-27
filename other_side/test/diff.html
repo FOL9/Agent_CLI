@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diff Viewer - Pro Max</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        body {
+            font-family: 'IBM Plex Sans', sans-serif;
+            background-color: #0F172A;
+            color: #F8FAFC;
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .block-shadow {
+            box-shadow: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+        }
+        .block-shadow-sm {
+            box-shadow: 2px 2px 0px 0px rgba(0, 0, 0, 1);
+        }
+        .block-shadow-hover:hover {
+            transform: translate(-2px, -2px);
+            box-shadow: 6px 6px 0px 0px rgba(0, 0, 0, 1);
+        }
+        .transition-all-200 {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        border: "#1E293B",
+                        input: "#1E293B",
+                        ring: "#22C55E",
+                        background: "#0F172A",
+                        foreground: "#F8FAFC",
+                        primary: {
+                            DEFAULT: "#1E293B",
+                            foreground: "#F8FAFC",
+                        },
+                        secondary: {
+                            DEFAULT: "#334155",
+                            foreground: "#F8FAFC",
+                        },
+                        destructive: {
+                            DEFAULT: "#EF4444",
+                            foreground: "#FFFFFF",
+                        },
+                        muted: {
+                            DEFAULT: "#1E293B",
+                            foreground: "#94A3B8",
+                        },
+                        accent: {
+                            DEFAULT: "#334155",
+                            foreground: "#F8FAFC",
+                        },
+                        popover: {
+                            DEFAULT: "#0F172A",
+                            foreground: "#F8FAFC",
+                        },
+                        card: {
+                            DEFAULT: "#1E293B",
+                            foreground: "#F8FAFC",
+                        },
+                        cta: {
+                            DEFAULT: "#22C55E",
+                            foreground: "#0F172A",
+                        }
+                    },
+                    borderWidth: {
+                        '3': '3px',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="p-8">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, createElement } = React;
+
+        // Utility for class names
+        function cn(...inputs) {
+            return inputs.filter(Boolean).join(' ');
+        }
+
+        // Mock Lucide Icons
+        const Icon = ({ name, className }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        // UI Components
+        const Card = ({ children, className }) => (
+            <div className={cn("bg-card text-card-foreground rounded-none border-3 border-black block-shadow transition-all-200", className)}>
+                {children}
+            </div>
+        );
+
+        const CardContent = ({ children, className }) => (
+            <div className={cn("p-6 pt-0", className)}>
+                {children}
+            </div>
+        );
+
+        const Badge = ({ children, className, variant = "default" }) => {
+            const variants = {
+                default: "bg-cta text-cta-foreground border-2 border-black",
+                outline: "text-foreground border-2 border-black bg-primary",
+            };
+            return (
+                <div className={cn("inline-flex items-center rounded-none px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 block-shadow-sm", variants[variant], className)}>
+                    {children}
+                </div>
+            );
+        };
+
+        const Button = ({ children, onClick, variant = "default", size = "default", className }) => {
+            const variants = {
+                default: "bg-cta text-cta-foreground hover:bg-cta/90 border-2 border-black",
+                ghost: "hover:bg-accent hover:text-accent-foreground",
+                outline: "border-2 border-black bg-background hover:bg-accent hover:text-accent-foreground",
+            };
+            const sizes = {
+                default: "h-10 px-4 py-2",
+                sm: "h-9 rounded-none px-3",
+                "icon-sm": "h-8 w-8 rounded-none flex items-center justify-center",
+            };
+            return (
+                <button 
+                    onClick={onClick}
+                    className={cn("inline-flex items-center justify-center rounded-none text-sm font-bold uppercase tracking-tight ring-offset-background transition-all-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 cursor-pointer block-shadow-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none", variants[variant], sizes[size], className)}
+                >
+                    {children}
+                </button>
+            );
+        };
+
+        // Sample Data
+        const SAMPLE_FILES = [
+            {
+                sha: "123456",
+                filename: "src/components/Button.tsx",
+                status: "modified",
+                additions: 5,
+                deletions: 2,
+                changes: 7,
+                patch: "@@ -1,5 +1,8 @@\n-import { useState } from 'react';\n+import { useState, useEffect } from 'react';\n \n export const Button = () => {\n+  useEffect(() => {\n+    console.log('Button mounted');\n+  }, []);\n   return <button>Click me</button>;\n }"
+            },
+            {
+                sha: "789012",
+                filename: "src/utils/math.ts",
+                status: "added",
+                additions: 10,
+                deletions: 0,
+                changes: 10,
+                patch: "@@ -0,0 +1,10 @@\n+export const add = (a: number, b: number) => a + b;\n+export const sub = (a: number, b: number) => a - b;\n+export const mul = (a: number, b: number) => a * b;\n+export const div = (a: number, b: number) => a / b;"
+            },
+            {
+                sha: "345678",
+                filename: "old-file.txt",
+                status: "removed",
+                additions: 0,
+                deletions: 5,
+                changes: 5,
+                patch: "@@ -1,5 +0,0 @@\n-This is an old file\n-that is no longer needed.\n-Goodbye world.\n-Line 4\n-Line 5"
+            }
+        ];
+
+        // Component Logic (Ported from test/diff.tsx)
+        
+        function parseLine(line, _oldNum, _newNum) {
+            if (line.startsWith("@@")) return { type: "hunk", isHunk: true };
+            if (line.startsWith("+")) return { type: "addition", isHunk: false };
+            if (line.startsWith("-")) return { type: "deletion", isHunk: false };
+            return { type: "context", isHunk: false };
+        }
+
+        function DiffTableRow({ line, lineInfo, oldNum, newNum }) {
+            const bgClass = {
+                addition: "bg-emerald-500/20",
+                deletion: "bg-red-500/20",
+                hunk: "bg-blue-500/20",
+                context: "",
+            }[lineInfo.type];
+
+            const textClass = {
+                addition: "text-emerald-400 font-bold",
+                deletion: "text-red-400 font-bold",
+                hunk: "text-blue-400 font-medium",
+                context: "text-slate-300",
+            }[lineInfo.type];
+
+            const lineNumClass = {
+                addition: "bg-emerald-500/10 text-emerald-400/70 border-r-2 border-emerald-500/30",
+                deletion: "bg-red-500/10 text-red-400/70 border-r-2 border-red-500/30",
+                hunk: "bg-blue-500/10 border-r-2 border-blue-500/30",
+                context: "text-slate-500 border-r-2 border-slate-700/50",
+            }[lineInfo.type];
+
+            if (lineInfo.isHunk) {
+                return (
+                    <tr className={bgClass}>
+                        <td colSpan={3} className={cn("px-4 py-2 text-xs font-bold uppercase tracking-widest", textClass, lineNumClass)}>
+                            {line}
+                        </td>
+                    </tr>
+                );
+            }
+
+            return (
+                <tr className={cn("group transition-colors duration-100", bgClass)}>
+                    <td className={cn("w-14 px-3 py-1 text-right select-none font-mono text-[10px]", lineNumClass)}>
+                        {oldNum || ""}
+                    </td>
+                    <td className={cn("w-14 px-3 py-1 text-right select-none font-mono text-[10px]", lineNumClass)}>
+                        {newNum || ""}
+                    </td>
+                    <td className={cn("px-4 py-1 whitespace-pre-wrap break-all", textClass)}>
+                        <span className="opacity-50 select-none mr-2">{line[0]}</span>
+                        {line.slice(1) || " "}
+                    </td>
+                </tr>
+            );
+        }
+
+        function DiffContent({ patch }) {
+            const lines = patch.split("\n");
+            let oldLineNum = 0;
+            let newLineNum = 0;
+
+            return (
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs font-mono">
+                        <tbody>
+                            {lines.map((line, index) => {
+                                const lineInfo = parseLine(line, oldLineNum, newLineNum);
+
+                                if (lineInfo.isHunk) {
+                                    const match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+                                    if (match?.[1] && match?.[2]) {
+                                        oldLineNum = parseInt(match[1], 10) - 1;
+                                        newLineNum = parseInt(match[2], 10) - 1;
+                                    }
+                                } else if (lineInfo.type === "deletion") {
+                                    oldLineNum++;
+                                } else if (lineInfo.type === "addition") {
+                                    newLineNum++;
+                                } else if (lineInfo.type === "context") {
+                                    oldLineNum++;
+                                    newLineNum++;
+                                }
+
+                                return (
+                                    <DiffTableRow
+                                        key={index}
+                                        line={line}
+                                        oldNum={lineInfo.type === "addition" ? null : oldLineNum}
+                                        newNum={lineInfo.type === "deletion" ? null : newLineNum}
+                                        lineInfo={lineInfo}
+                                    />
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        }
+
+        function getStatusIcon(status) {
+            switch (status) {
+                case "added": return "file-plus";
+                case "removed": return "file-minus";
+                case "modified":
+                case "changed": return "file-edit";
+                case "renamed": return "file-edit";
+                default: return "file-text";
+            }
+        }
+
+        function getStatusConfig(status) {
+            switch (status) {
+                case "added": return { color: "text-emerald-400", bg: "bg-emerald-500/20" };
+                case "removed": return { color: "text-red-400", bg: "bg-red-500/20" };
+                case "modified":
+                case "changed": return { color: "text-amber-400", bg: "bg-amber-500/20" };
+                case "renamed": return { color: "text-blue-400", bg: "bg-blue-500/20" };
+                default: return { color: "text-slate-400", bg: "bg-slate-800" };
+            }
+        }
+
+        function DiffFileCard({ file, expanded, onToggle }) {
+            const [copied, setCopied] = useState(false);
+            const statusIcon = getStatusIcon(file.status);
+            const statusConfig = getStatusConfig(file.status);
+
+            const copyFilename = () => {
+                navigator.clipboard.writeText(file.filename);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            };
+
+            const pathParts = file.filename.split("/");
+            const fileName = pathParts.pop();
+            const directory = pathParts.join("/");
+
+            return (
+                <Card className="overflow-hidden mb-6 border-black">
+                    <button
+                        onClick={onToggle}
+                        className="flex items-center gap-4 w-full px-6 py-4 text-left hover:bg-white/5 transition-all duration-200 cursor-pointer group"
+                    >
+                        <div className="shrink-0 transition-transform duration-200 group-hover:scale-110">
+                            {expanded ? (
+                                <Icon name="chevron-down" className="size-5 text-cta" />
+                            ) : (
+                                <Icon name="chevron-right" className="size-5 text-slate-400" />
+                            )}
+                        </div>
+
+                        <div className={cn("p-2 border-2 border-black block-shadow-sm shrink-0", statusConfig.bg)}>
+                            <Icon name={statusIcon} className={cn("size-5 text-white")} />
+                        </div>
+
+                        <div className="flex-1 min-w-0 flex items-center gap-2">
+                            {directory && (
+                                <span className="text-sm text-slate-500 font-mono truncate hidden md:inline">
+                                    {directory}/
+                                </span>
+                            )}
+                            <span className="text-base font-bold font-mono truncate text-white">
+                                {fileName}
+                            </span>
+                            {file.previousFilename && (
+                                <Badge variant="outline" className="text-[10px] shrink-0 ml-2">
+                                    {file.previousFilename}
+                                </Badge>
+                            )}
+                        </div>
+
+                        <div className="flex items-center gap-4 shrink-0">
+                            <div className="hidden sm:flex items-center gap-1.5 p-1 bg-black/20 rounded-sm">
+                                {Array.from({ length: Math.min(5, file.additions) }).map((_, i) => (
+                                    <div key={`add-${i}`} className="w-2 h-4 bg-emerald-500 border border-black" />
+                                ))}
+                                {Array.from({ length: Math.min(5, file.deletions) }).map((_, i) => (
+                                    <div key={`del-${i}`} className="w-2 h-4 bg-red-500 border border-black" />
+                                ))}
+                            </div>
+
+                            <div className="flex items-center gap-3 text-sm tabular-nums font-bold">
+                                <span className="text-emerald-400">
+                                    +{file.additions}
+                                </span>
+                                <span className="text-red-400">
+                                    -{file.deletions}
+                                </span>
+                            </div>
+                        </div>
+                    </button>
+
+                    {expanded && (
+                        <CardContent className="p-0 border-t-3 border-black bg-[#020617]">
+                            {file.patch ? (
+                                <div className="relative">
+                                    <Button
+                                        variant="outline"
+                                        size="icon-sm"
+                                        className="absolute top-4 right-4 z-10 opacity-40 hover:opacity-100 transition-opacity"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            copyFilename();
+                                        }}
+                                    >
+                                        {copied ? <Icon name="check" className="w-4 h-4" /> : <Icon name="copy" className="w-4 h-4" />}
+                                    </Button>
+
+                                    <DiffContent patch={file.patch} />
+                                </div>
+                            ) : (
+                                <div className="py-12 text-center text-sm text-slate-500 italic">
+                                    <Icon name="file-warning" className="size-10 mx-auto mb-4 opacity-20" />
+                                    <p>No changes detected in this file.</p>
+                                </div>
+                            )}
+                        </CardContent>
+                    )}
+                </Card>
+            );
+        }
+
+        function DiffViewer({ files }) {
+            const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
+            const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
+            const [expandedFiles, setExpandedFiles] = useState(
+                new Set(files.map((f) => f.sha))
+            );
+
+            const toggleFile = (sha) => {
+                const next = new Set(expandedFiles);
+                if (next.has(sha)) {
+                    next.delete(sha);
+                } else {
+                    next.add(sha);
+                }
+                setExpandedFiles(next);
+            };
+
+            const expandAll = () => setExpandedFiles(new Set(files.map((f) => f.sha)));
+            const collapseAll = () => setExpandedFiles(new Set());
+
+            return (
+                <div className="max-w-6xl mx-auto space-y-8">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-primary p-6 border-3 border-black block-shadow">
+                        <div className="flex flex-wrap items-center gap-6">
+                            <div className="flex items-center gap-3">
+                                <div className="p-3 bg-cta border-2 border-black block-shadow-sm">
+                                    <Icon name="git-commit" className="size-6 text-cta-foreground" />
+                                </div>
+                                <div>
+                                    <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Changeset</div>
+                                    <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl font-black tabular-nums text-white">
+                                            {files.length}
+                                        </span>
+                                        <span className="text-sm font-bold text-slate-400 uppercase">
+                                            {files.length === 1 ? "file" : "files"}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="h-10 w-px bg-slate-700 hidden md:block" />
+                            
+                            <div className="flex items-center gap-8">
+                                <div className="space-y-1">
+                                    <div className="text-[10px] font-bold text-emerald-500/70 uppercase tracking-widest">Additions</div>
+                                    <div className="flex items-center gap-2 text-emerald-400">
+                                        <Icon name="plus-circle" className="size-4" />
+                                        <span className="text-xl font-black tabular-nums">{totalAdditions}</span>
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <div className="text-[10px] font-bold text-red-500/70 uppercase tracking-widest">Deletions</div>
+                                    <div className="flex items-center gap-2 text-red-400">
+                                        <Icon name="minus-circle" className="size-4" />
+                                        <span className="text-xl font-black tabular-nums">{totalDeletions}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            <Button variant="outline" size="sm" onClick={expandAll} className="bg-primary/50">
+                                <Icon name="maximize-2" className="size-4 mr-2" />
+                                Expand All
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={collapseAll} className="bg-primary/50">
+                                <Icon name="minimize-2" className="size-4 mr-2" />
+                                Collapse All
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        {files.map((file) => (
+                            <DiffFileCard
+                                key={file.sha}
+                                file={file}
+                                expanded={expandedFiles.has(file.sha)}
+                                onToggle={() => toggleFile(file.sha)}
+                            />
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        const App = () => {
+            return (
+                <div className="min-h-screen bg-background text-foreground pb-20">
+                    {/* Header */}
+                    <nav className="border-b-3 border-black bg-primary mb-12 sticky top-0 z-50 block-shadow-sm">
+                        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="size-8 bg-cta border-2 border-black flex items-center justify-center block-shadow-sm">
+                                    <Icon name="code-2" className="size-5 text-cta-foreground" />
+                                </div>
+                                <span className="text-xl font-black uppercase tracking-tighter">
+                                    Diff<span className="text-cta">Viewer</span>
+                                </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-6">
+                                <div className="hidden md:flex items-center gap-1 px-3 py-1 bg-black/40 border border-slate-700 rounded-none text-[10px] font-mono text-slate-400">
+                                    <span className="text-cta">SHA:</span>
+                                    <span>a7b8c9d...</span>
+                                </div>
+                                <Button variant="default" size="sm" className="bg-cta text-cta-foreground">
+                                    <Icon name="git-pull-request" className="size-4 mr-2" />
+                                    Review
+                                </Button>
+                            </div>
+                        </div>
+                    </nav>
+
+                    <div className="container px-6">
+                        <div className="max-w-6xl mx-auto mb-12">
+                            <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter mb-4 leading-none">
+                                Commit <span className="text-cta">Diff</span>
+                            </h1>
+                            <p className="text-slate-400 font-medium max-w-2xl">
+                                Review code changes with high-precision visualization. 
+                                Optimized for performance and developer productivity.
+                            </p>
+                        </div>
+                        
+                        <DiffViewer files={SAMPLE_FILES} />
+                    </div>
+                    
+                    {/* Footer */}
+                    <footer className="mt-20 border-t-3 border-black pt-10 pb-10 bg-primary/30">
+                        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                &copy; 2026 DiffViewer Pro Max. All rights reserved.
+                            </div>
+                            <div className="flex items-center gap-8">
+                                <a href="#" className="text-xs font-bold text-slate-400 hover:text-cta transition-colors uppercase tracking-widest">Documentation</a>
+                                <a href="#" className="text-xs font-bold text-slate-400 hover:text-cta transition-colors uppercase tracking-widest">Support</a>
+                                <a href="#" className="text-xs font-bold text-slate-400 hover:text-cta transition-colors uppercase tracking-widest">GitHub</a>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

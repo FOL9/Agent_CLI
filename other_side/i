@@ -1,0 +1,1082 @@
+import os
+import sys
+import json
+import logging
+import threading
+import time
+import shutil
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from dotenv import load_dotenv
+
+from google import genai
+from google.genai import types
+
+from func.get_files_info import schema_get_files_info
+from func.get_file_content import schema_get_file_content
+from func.write_file import schema_write_file
+from func.run_python_file import schema_run_python_file
+from func.run_shell import schema_run_shell
+from func.patch_file import schema_patch_file
+from func.build import schema_build_project, schema_install_dependencies
+from func.plan_project import schema_plan_project
+from func.codespace_tools import ALL_CS_SCHEMAS
+from call_function import call_function
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.syntax import Syntax
+from rich import box
+from rich.logging import RichHandler
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion, merge_completers
+from prompt_toolkit.styles import Style as PromptStyle
+
+
+# ============================================================================
+# THEME & STYLING
+# ============================================================================
+
+class Theme:
+    """Centralized theme configuration"""
+    ORANGE = "#FF8C42"
+    DIM    = "#6B7280"
+    TEXT   = "#F9FAFB"
+    GREEN  = "#10B981"
+    RED    = "#EF4444"
+    YELLOW = "#F59E0B"
+    CYAN   = "#06B6D4"
+    CYANa  = "#ffffff"
+    PURPLE = "#A78BFA"
+    BLUE   = "#3B82F6"
+
+
+# ============================================================================
+# AUTOCOMPLETE SYSTEM
+# ============================================================================
+
+class CommandCompleter(Completer):
+    """Completer for / commands"""
+
+    COMMANDS = [
+        'help', 'history', 'clear', 'status',
+        'monitor_on', 'monitor_off', 'reload', 'exit', 'quit', 'q'
+    ]
+
+    def get_completions(self, document, complete_event):
+        word_before_cursor = document.get_word_before_cursor(
+            pattern=re.compile(r'/[^\s]*')
+        )
+        if not word_before_cursor.startswith('/'):
+            return
+        search_term = word_before_cursor[1:].lower()
+        for cmd in self.COMMANDS:
+            if search_term in cmd.lower():
+                yield Completion(
+                    f"/{cmd}",
+                    start_position=-len(word_before_cursor),
+                    display=f"/{cmd}"
+                )
+
+
+class FilePathCompleter(Completer):
+    """
+    Completer for @ file paths.
+
+    FIX #1: The original called os.walk('.') on EVERY keystroke, which
+    freezes the terminal on large projects. We now build the file list
+    once and refresh it lazily in a background thread every 30 seconds.
+
+    FIX #9: The original iterated `files + dirs` then checked
+    `entry in dirs` (O(n) per item, and wrong when names overlap).
+    Fixed to iterate dirs and files separately.
+    """
+
+    IGNORE_DIRS      = {'__pycache__', 'node_modules', 'venv', '.git',
+                        '.next', 'dist', 'build', '.mypy_cache', '.pytest_cache'}
+    REFRESH_INTERVAL = 30  # seconds
+
+    def __init__(self):
+        self._cache: List[str] = []
+        self._last_refresh: float = 0.0
+        self._lock = threading.Lock()
+
+    def _rebuild(self):
+        """Walk the project tree and refresh the internal cache."""
+        new_cache: List[str] = []
+        for root, dirs, files in os.walk('.'):
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith('.') and d not in self.IGNORE_DIRS
+            ]
+            for d in dirs:
+                rel = os.path.relpath(os.path.join(root, d), '.')
+                new_cache.append(rel + '/')
+            for f in files:
+                rel = os.path.relpath(os.path.join(root, f), '.')
+                new_cache.append(rel)
+        with self._lock:
+            self._cache = new_cache
+            self._last_refresh = time.time()
+
+    def _ensure_fresh(self):
+        """Trigger a background refresh if cache is stale."""
+        if time.time() - self._last_refresh > self.REFRESH_INTERVAL:
+            self._last_refresh = time.time()   # prevent duplicate threads
+            threading.Thread(target=self._rebuild, daemon=True).start()
+
+    def get_completions(self, document, complete_event):
+        word_before_cursor = document.get_word_before_cursor(
+            pattern=re.compile(r'@[^\s]*')
+        )
+        if not word_before_cursor.startswith('@'):
+            return
+
+        self._ensure_fresh()
+        search_term = word_before_cursor[1:].lower()
+
+        with self._lock:
+            snapshot = list(self._cache)
+
+        for entry in snapshot:
+            if search_term in entry.lower():
+                yield Completion(
+                    f"@{entry}",
+                    start_position=-len(word_before_cursor),
+                    display=f"@{entry}"
+                )
+
+
+autocomplete_style = PromptStyle.from_dict({
+    'completion-menu':                  'bg:#121212 fg:#888888',
+    'completion-menu.completion.current': 'bg:#222222 fg:#ffffff',
+    'completion-menu.completion':       'fg:#888888',
+})
+
+
+# ============================================================================
+# TERMINAL SIZE UTILITIES
+# ============================================================================
+
+class TerminalUtils:
+    """Utilities for responsive terminal handling"""
+
+    @staticmethod
+    def get_terminal_size() -> tuple:
+        try:
+            return shutil.get_terminal_size()
+        except Exception:
+            return (80, 24)
+
+    @staticmethod
+    def get_width() -> int:
+        return TerminalUtils.get_terminal_size()[0]
+
+    @staticmethod
+    def get_height() -> int:
+        return TerminalUtils.get_terminal_size()[1]
+
+    @staticmethod
+    def truncate_text(text: str, max_width: int, suffix: str = "...") -> str:
+        if len(text) <= max_width:
+            return text
+        return text[:max_width - len(suffix)] + suffix
+
+    @staticmethod
+    def wrap_text(text: str, width: int) -> List[str]:
+        words = text.split()
+        lines: List[str] = []
+        current_line: List[str] = []
+        current_length = 0
+        for word in words:
+            word_length = len(word) + 1
+            if current_length + word_length <= width:
+                current_line.append(word)
+                current_length += word_length
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+                current_length = word_length
+        if current_line:
+            lines.append(' '.join(current_line))
+        return lines
+
+    @staticmethod
+    def is_narrow_terminal() -> bool:
+        return TerminalUtils.get_width() < 80
+
+
+# ============================================================================
+# REAL-TIME STATUS TRACKER
+# ============================================================================
+
+class StatusTracker:
+    """
+    Real-time status display showing elapsed time and token consumption.
+
+    FIX #3: A single StatusTracker is created per request. Instead of
+    destroying and recreating it (and its OS thread) on every tool call,
+    we pause() the display thread and resume() it for the next inference.
+
+    FIX #5: Visible line length is tracked separately from the raw ANSI
+    string so the clear padding is always exactly right.
+
+    FIX #7: stop() / pause() are idempotent — safe to call multiple times.
+    """
+
+    def __init__(self):
+        self.running         = False
+        self.thread: Optional[threading.Thread] = None
+        self.start_time: Optional[float] = None
+        self.prompt_tokens   = 0
+        self.completion_tokens = 0
+        self.total_tokens    = 0
+        self._lock           = threading.Lock()
+        self._visible_len    = 0   # FIX #5: real on-screen character count
+
+    # ── public API ──────────────────────────────────────────────────────────
+
+    def start(self):
+        """Start tracking from zero."""
+        if self.running:
+            return
+        self.start_time = time.time()
+        self.prompt_tokens = self.completion_tokens = self.total_tokens = 0
+        self._launch_thread()
+
+    def pause(self):
+        """Freeze the display (keeps elapsed time running internally)."""
+        self._kill_thread()
+
+    def resume(self):
+        """Resume the display after pause()."""
+        if not self.running:
+            self._launch_thread()
+
+    def stop(self):
+        """Fully stop. Safe to call multiple times (idempotent)."""
+        self._kill_thread()
+
+    def update_tokens(self, prompt: int = 0, completion: int = 0):
+        with self._lock:
+            self.prompt_tokens     += prompt
+            self.completion_tokens += completion
+            self.total_tokens       = self.prompt_tokens + self.completion_tokens
+
+    # ── internals ───────────────────────────────────────────────────────────
+
+    def _launch_thread(self):
+        self.running = True
+        self.thread  = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _kill_thread(self):
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.6)
+        self._clear()
+
+    def _clear(self):
+        sys.stdout.write('\r' + ' ' * (self._visible_len + 2) + '\r')
+        sys.stdout.flush()
+
+    @staticmethod
+    def _fmt_time(secs: float) -> str:
+        if secs < 60:
+            return f"{int(secs)}s"
+        return f"{int(secs // 60)}m {int(secs % 60)}s"
+
+    def _loop(self):
+        while self.running:
+            elapsed = time.time() - (self.start_time or time.time())
+            t_str   = self._fmt_time(elapsed)
+            with self._lock:
+                tok_str = f"↑ {self.total_tokens} tokens" if self.total_tokens else "..."
+
+            visible  = f"(esc to interrupt · {t_str} · {tok_str})"
+            ansi_str = f"\033[90m{visible}\033[0m"
+
+            self._clear()
+            sys.stdout.write(ansi_str)
+            sys.stdout.flush()
+            self._visible_len = len(visible)  # FIX #5
+            time.sleep(0.5)
+
+    # ── context manager ─────────────────────────────────────────────────────
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *_):
+        self.stop()
+
+
+# ============================================================================
+# THINKING ANIMATION
+# ============================================================================
+
+class ThinkingSpinner:
+    """Animated thinking spinner (kept for optional use)"""
+
+    FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    COLOR_MAP = {
+        Theme.CYAN: '96', Theme.GREEN: '92', Theme.YELLOW: '93',
+        Theme.ORANGE: '91', Theme.PURPLE: '95', Theme.BLUE: '94',
+    }
+
+    def __init__(self, prefix: str = "⚙  Processing your request",
+                 color: str = Theme.YELLOW):
+        self.prefix = prefix
+        self.color  = color
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self._idx = 0
+
+    def _animate(self):
+        while self.running:
+            frame  = self.FRAMES[self._idx % len(self.FRAMES)]
+            width  = TerminalUtils.get_width()
+            prefix = TerminalUtils.truncate_text(self.prefix, width - 10)
+            code   = self.COLOR_MAP.get(self.color, '93')
+            sys.stdout.write(f'\r\033[{code}m{prefix} {frame}\033[0m')
+            sys.stdout.flush()
+            self._idx += 1
+            time.sleep(0.08)
+
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.thread  = threading.Thread(target=self._animate, daemon=True)
+            self.thread.start()
+
+    def stop(self, success_msg: Optional[str] = None):
+        if self.running:
+            self.running = False
+            if self.thread:
+                self.thread.join(timeout=0.2)
+            width = TerminalUtils.get_width()
+            if success_msg:
+                msg = TerminalUtils.truncate_text(success_msg, width - 5)
+                sys.stdout.write(f'\r\033[92m✔\033[0m {msg}\n')
+            else:
+                sys.stdout.write('\r\033[92m✔\033[0m Done!       \n')
+            sys.stdout.flush()
+
+    def __enter__(self):
+        self.start(); return self
+
+    def __exit__(self, exc_type, *_):
+        if exc_type:
+            sys.stdout.write('\r\033[91m✗\033[0m Failed!     \n')
+            sys.stdout.flush()
+        else:
+            self.stop()
+
+
+# ============================================================================
+# LOGGER
+# ============================================================================
+
+class Logger:
+    """Enhanced logging system with monitoring toggle"""
+
+    def __init__(self, log_dir: str = "logs"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(exist_ok=True)
+        self.monitoring_enabled = False
+
+        log_file = self.log_dir / f"sdx_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="( %(asctime)s )",
+            handlers=[
+                RichHandler(console=Console(), show_time=True, show_path=True),
+                logging.FileHandler(log_file)
+            ]
+        )
+        self.logger = logging.getLogger("SDX Agent")
+
+        self.rich_handler: Optional[RichHandler] = None
+        self.file_handler: Optional[logging.FileHandler] = None
+        for h in self.logger.handlers:
+            if isinstance(h, RichHandler):
+                self.rich_handler = h
+            elif isinstance(h, logging.FileHandler):
+                self.file_handler = h
+
+        self._set_external_logging(False)
+
+    def enable_monitoring(self):
+        self.monitoring_enabled = True
+        self._set_external_logging(True)
+        if self.rich_handler:
+            self.rich_handler.setLevel(logging.INFO)
+        self.logger.info("🔍 Monitoring enabled - showing all requests and logs")
+
+    def disable_monitoring(self):
+        self.monitoring_enabled = False
+        self._set_external_logging(False)
+        self.logger.info("🔇 Monitoring disabled - hiding verbose logs")
+
+    def _set_external_logging(self, enabled: bool):
+        level = logging.INFO if enabled else logging.WARNING
+        for name in ("google_genai", "httpx", "google.generativeai", "google.api_core"):
+            logging.getLogger(name).setLevel(level)
+
+    def info(self, msg: str):    self.logger.info(msg)
+    def error(self, msg: str):   self.logger.error(msg)
+    def warning(self, msg: str): self.logger.warning(msg)
+    def debug(self, msg: str):   self.logger.debug(msg)
+
+
+# ============================================================================
+# SESSION MANAGEMENT
+# ============================================================================
+
+class SessionManager:
+    """Manages chat history and session state"""
+
+    def __init__(self, session_dir: str = "sessions",
+                 log: Optional[Logger] = None):
+        # FIX #6: logger passed in — never None at construction time
+        self._log = log
+        self.session_dir  = Path(session_dir)
+        self.session_dir.mkdir(exist_ok=True)
+        self.session_id   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.session_dir / f"session_{self.session_id}.json"
+        self.history: List[Dict[str, Any]] = []
+        self.load_history()
+
+    def add_message(self, role: str, content: str,
+                    metadata: Optional[Dict] = None):
+        self.history.append({
+            "timestamp": datetime.now().isoformat(),
+            "role":      role,
+            "content":   content,
+            "metadata":  metadata or {}
+        })
+        self.save_history()
+
+    def save_history(self):
+        with open(self.session_file, 'w') as f:
+            json.dump(self.history, f, indent=2)
+
+    def load_history(self):
+        if self.session_file.exists():
+            try:
+                with open(self.session_file, 'r') as f:
+                    self.history = json.load(f)
+            except Exception as e:
+                if self._log:
+                    self._log.warning(f"Could not load session history: {e}")
+                self.history = []
+
+    def get_context(self, limit: int = 5) -> List[Dict]:
+        return self.history[-limit:]
+
+    def clear_history(self):
+        self.history = []
+        self.save_history()
+
+
+# ============================================================================
+# COMMAND HANDLER
+# ============================================================================
+
+class CommandHandler:
+    """Handles special commands and shortcuts"""
+
+    COMMANDS = {
+        'help':        'Show help information',
+        'history':     'Show chat history',
+        'clear':       'Clear chat history',
+        'status':      'Show agent status',
+        'monitor_on':  'Enable request monitoring (show API calls)',
+        'monitor_off': 'Disable request monitoring (hide API calls)',
+        'reload':      'Reload the agent',
+        'exit':        'Exit the agent',
+        'quit':        'Exit the agent',
+        'q':           'Exit the agent (shorthand)',
+    }
+
+    def __init__(self, session: SessionManager, console: Console,
+                 log: Logger):
+        self.session = session
+        self.console = console
+        self.logger  = log
+
+    def is_command(self, text: str) -> bool:
+        return text.lower().strip().startswith('/')
+
+    def handle(self, text: str) -> Optional[str]:
+        cmd = text.lower().strip().lstrip('/')
+        if cmd == 'reload':              return "RELOAD"
+        if cmd in ('exit', 'quit', 'q'): return "EXIT"
+        if cmd == 'help':                return self._show_help()
+        if cmd == 'history':             return self._show_history()
+        if cmd == 'clear':
+            self.session.clear_history()
+            return "Chat history cleared."
+        if cmd == 'status':              return self._show_status()
+        if cmd == 'monitor_on':
+            self.logger.enable_monitoring()
+            return "✓ Monitoring enabled - API requests will be shown"
+        if cmd == 'monitor_off':
+            self.logger.disable_monitoring()
+            return "✓ Monitoring disabled - API requests hidden"
+        return None
+
+    def _show_help(self) -> str:
+        is_narrow = TerminalUtils.is_narrow_terminal()
+        lines = ["Available Commands:\n"]
+        for cmd, desc in self.COMMANDS.items():
+            lines.append(
+                f"/{cmd}\n  {desc}\n" if is_narrow
+                else f"  /{cmd:<15} - {desc}\n"
+            )
+        lines += ["\nFile Reference:\n",
+                  "  Type @ to autocomplete file paths\n",
+                  "  Example: @src/main.py\n"]
+        return ''.join(lines)
+
+    def _show_history(self) -> str:
+        if not self.session.history:
+            return "No chat history available."
+        max_w = max(50, TerminalUtils.get_width() - 20)
+        lines = ["\n[Recent Chat History]\n"]
+        for i, msg in enumerate(self.session.history[-10:], 1):
+            role    = msg['role'].upper()
+            content = msg['content']
+            if len(content) > max_w:
+                content = content[:max_w] + "..."
+            lines.append(f"{i}. [{role}] {content}\n")
+        return ''.join(lines)
+
+    def _show_status(self) -> str:
+        cwd   = os.getcwd()
+        width = TerminalUtils.get_width()
+        if len(cwd) > width - 25:
+            cwd = "..." + cwd[-(width - 28):]
+        mon = "ON" if self.logger.monitoring_enabled else "OFF"
+        return (
+            f"Working Directory: {cwd}\n"
+            f"Session ID: {self.session.session_id}\n"
+            f"Messages: {len(self.session.history)}\n"
+            f"Monitoring: {mon}\n"
+            f"Shell Execution: ENABLED ⚠️\n"
+            f"Autocomplete: ENABLED (/ for commands, @ for files)\n"
+            f"Terminal Size: {width}x{TerminalUtils.get_height()}"
+        )
+
+
+# ============================================================================
+# UI COMPONENTS
+# ============================================================================
+
+class UI:
+    """Centralized UI rendering with responsive design"""
+
+    def __init__(self):
+        self.console = Console()
+
+    def clear(self):
+        self.console.clear()
+
+    def create_robot(self) -> str:
+        if TerminalUtils.is_narrow_terminal():
+            return ""
+        return (
+            "         ▀▄     ▄▀\n"
+            "         █████████\n"
+            "         █▄█████▄█\n"
+            "         █████████\n"
+            "         █ █   █ █\n"
+        )
+
+    def welcome_screen(self):
+        self.clear()
+        width     = TerminalUtils.get_width()
+        is_narrow = TerminalUtils.is_narrow_terminal()
+        cwd       = os.getcwd()
+        if len(cwd) > width - 10:
+            cwd = "..." + cwd[-(width - 13):]
+
+        if is_narrow:
+            content = Text()
+            content.append("✻ SDX Agent\n",          style=f"bold {Theme.TEXT}")
+            content.append(self.create_robot(),       style=f"bold {Theme.ORANGE}")
+            content.append("\n/help for commands\n",  style=f"italic {Theme.TEXT}")
+            content.append("@ for files\n",           style=f"italic {Theme.TEXT}")
+            content.append(f"CWD: {cwd}\n",           style=f"italic {Theme.CYANa}")
+            content.append("DEV by : FAHFAH MOHAMED", style=f"italic {Theme.CYANa}")
+        else:
+            left = Text()
+            left.append(" ✻ Welcome to SDX Agent!\n",          style=f"bold {Theme.TEXT}")
+            left.append(" │\n",                                 style=f"bold {Theme.TEXT}")
+            left.append(" └──Type / for commands, @ for files\n", style=f"italic {Theme.TEXT}")
+            left.append("    /help for help\n\n",               style=f"italic {Theme.TEXT}")
+            left.append(f" CWD: {cwd}\n",                       style=f"italic {Theme.CYANa}")
+            left.append(" DEV by : FAHFAH MOHAMED",             style=f"italic {Theme.CYANa}")
+
+            robot_width = 22
+            safe_width  = max(40, width - robot_width - 15)
+            layout = Table.grid(expand=False, padding=(0, 3))
+            layout.add_column(width=safe_width)
+            layout.add_column(width=robot_width, justify="right")
+            layout.add_row(left, Text(self.create_robot(), style=Theme.ORANGE))
+            content = layout
+
+        self.console.print(Panel(
+            content, title="", title_align="left",
+            border_style=Theme.ORANGE, box=box.ROUNDED, padding=(1, 2),
+        ))
+        self.console.print()
+
+    def separator(self):
+        width = min(TerminalUtils.get_width(), 80)
+        self.console.print(f"[{Theme.DIM}]{'─' * width}[/{Theme.DIM}]")
+
+    # ── generic panel helper ────────────────────────────────────────────────
+
+    def _panel(self, content: str, title: str, border: str):
+        wrapped = self._wrap_content(content, TerminalUtils.get_width() - 10)
+        self.console.print(Panel(
+            wrapped, title=title, border_style=border,
+            padding=(1, 2), expand=False
+        ))
+
+    def success(self, title: str, content: str):
+        self._panel(content, f"[{Theme.GREEN}]✓ {title}[/{Theme.GREEN}]", Theme.GREEN)
+
+    def error(self, title: str, content: str):
+        self._panel(content, f"[{Theme.RED}]✗ {title}[/{Theme.RED}]", Theme.RED)
+
+    def warning(self, title: str, content: str):
+        self._panel(content, f"[{Theme.YELLOW}]⚠ {title}[/{Theme.YELLOW}]", Theme.YELLOW)
+
+    def info(self, title: str, content: str):
+        self._panel(content, f"[{Theme.CYAN}]ℹ {title}[/{Theme.CYAN}]", Theme.CYAN)
+
+    def code(self, code: str, language: str = "python"):
+        self.console.print(Syntax(
+            code, language, theme="monokai",
+            line_numbers=not TerminalUtils.is_narrow_terminal(),
+            word_wrap=True
+        ))
+
+    def _wrap_content(self, content: str, max_width: int) -> str:
+        lines = []
+        for line in content.split('\n'):
+            if len(line) <= max_width:
+                lines.append(line)
+            else:
+                lines.extend(TerminalUtils.wrap_text(line, max_width))
+        return '\n'.join(lines)
+
+    def print_tool_execution(self, tool_name: str, args: Dict[str, Any],
+                              result: str = None):
+        """Print a tool execution log line with 'Green Dot' style"""
+        DISPATCH: Dict[str, tuple] = {
+            "read_file":            ("Read file",     "file_path"),
+            "get_file_content":     ("Read file",     "file_path"),
+            "write_file":           ("Update file",   "file_path"),
+            "patch_file":           ("Patch file",    "file_path"),
+            "run_shell":            ("Run Cmd",       "command"),
+            "run_cmd":              ("Run Cmd",       "command"),
+            "run_python_file":      ("Run Python",    "file_path"),
+            "get_files_info":       ("List files",    "path"),
+            "build_project":        ("Build project", "build_tool"),
+            "install_dependencies": ("Install deps",  "package_manager"),
+        }
+        if tool_name in DISPATCH:
+            display_name, key = DISPATCH[tool_name]
+            default  = "." if key == "path" else ""
+            args_str = f'"{args.get(key, default)}"'
+        else:
+            display_name = tool_name.replace("_", " ").capitalize()
+            vals     = list(args.values())
+            args_str = f'"{str(vals[0])}"' if vals else '""'
+
+        self.console.print(
+            f"[green]●[/green] [bold white]{display_name}[/bold white] "
+            f"[yellow]{args_str}[/yellow]"
+        )
+        if result:
+            first_line = str(result).strip().split('\n')[0]
+            if len(first_line) > 80:
+                first_line = first_line[:77] + "..."
+            self.console.print(f"  [dim]└─ {first_line}[/dim]")
+
+
+# ============================================================================
+# AI AGENT
+# ============================================================================
+
+class SDXAgent:
+    """Main AI Agent class"""
+
+    MODEL = 'gemini-3-flash-preview'   # kept as-is per user  request gemini-3.1-pro-preview // gemini-3-flash-preview
+
+    SYSTEM_PROMPT = """You are an elite software engineer and cybersecurity expert with deep expertise across multiple domains.
+
+
+don't ret to list dir you had no work in it just list dir user selected for work 
+For complex tasks, follow this structured approach:
+
+1. PLAN (use plan_project tool):
+   │ Generate detailed JSON plan with tasks and subtasks
+   │ Plan is auto-saved to plans/TASK_NAME_TIMESTAMP.json
+   └ JSON structure: {tasks: [{id, title, dependencies, subtasks, files_to_modify}]}
+
+2. REVIEW the plan:
+   │ Read the generated JSON file
+   │ Understand task dependencies (execute in order)
+   │ Note which files need modification
+   └ Identify test strategies for each task
+
+3. EXECUTE step-by-step:
+   │ Follow tasks sequentially, respecting dependencies
+   │ Complete ALL subtasks in a task before moving to next
+   │ Use patch_file for updates (NOT write_file)
+   │ Run tests after each major task
+   └ Track progress by marking subtasks complete
+
+When to use planning:
+✓ Feature additions: "Add user authentication", "Implement payment system"
+✓ Major refactoring: "Refactor API routes", "Reorganize components"
+✓ Complex bug fixes requiring multiple file changes
+✓ Architecture changes or migrations
+
+Skip planning for:
+✗ Simple file reads or single file edits
+✗ Direct shell commands
+✗ Quick fixes or formatting changes
+
+After planning:
+1. Review the generated plan (saved in plans/)
+2. Execute steps sequentially using patch_file, write_file, etc.
+3. Test after each major step
+4. Update documentation
+
+**VERY NECESSARY: when you UPDATE FILE USE TOOL OF PATCH FILE**
+
+You operate with strict intelligence and token efficiency.
+
+File system operations:
+- If user selects a directory (@example):
+  • First list the directory structure ONLY
+  • Identify the MOST relevant subdirectory
+  • Read ONLY files directly related to the task
+  • NEVER recursively read all files
+- If user selects a file:
+  • Read ONLY that file
+
+Efficiency Rules (CRITICAL):
+- Never read entire directories blindly
+- Never scan node_modules / build folders
+- Minimize token usage at all times
+- Each file read must have a clear reason
+
+File Updates: always use patch_file, not write_file.
+
+Output style — monospace tree, no markdown bullets, no emojis:
+
+Update Todos
+│ Add FrameworkSelector component to ProjectSettings.tsx
+│ Add framework preset state and logic
+└ Test the functionality
+
+remember : Reading files ---> thinking ---> planning ---> working
+"""
+
+    def __init__(self, api_key: Optional[str] = None,
+                 log: Optional[Logger] = None):
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY not found in environment variables")
+
+        self.client  = genai.Client(api_key=self.api_key)
+        self.ui      = UI()
+        self.logger  = log
+
+        # FIX #6: pass logger so SessionManager is never None when it logs
+        self.session = SessionManager(log=self.logger)
+
+        self.command_handler = CommandHandler(
+            self.session, self.ui.console, self.logger
+        )
+        self.max_iterations = 20
+
+        # FIX #4: build GenerateContentConfig once — tools don't change
+        self._config = self._build_config()
+
+        self.prompt_session = PromptSession(
+            completer=merge_completers([CommandCompleter(), FilePathCompleter()]),
+            style=autocomplete_style,
+            complete_while_typing=True,
+            complete_in_thread=True,   # keeps UI responsive
+        )
+
+    # ── config ──────────────────────────────────────────────────────────────
+
+    def _build_config(self) -> types.GenerateContentConfig:
+        """Build once and reuse."""
+        return types.GenerateContentConfig(
+            tools=[types.Tool(function_declarations=[
+                schema_get_files_info,
+                schema_get_file_content,
+                schema_run_python_file,
+                schema_write_file,
+                schema_run_shell,
+                schema_build_project,
+                schema_install_dependencies,
+                schema_patch_file,
+                schema_plan_project,
+                ALL_CS_SCHEMAS,
+            ])],
+            system_instruction=self.SYSTEM_PROMPT,
+            temperature=0.7,
+        )
+
+    # ── request processing ───────────────────────────────────────────────────
+
+    def process_request(self, user_input: str, verbose: bool = False):
+        """
+        Process user request with AI.
+
+        FIX #2: The message list is seeded from the full session history
+        so the model has genuine multi-turn memory.
+
+        FIX #3: ONE StatusTracker per request; pause()/resume() wrap
+        tool execution instead of creating new threads each iteration.
+
+        FIX #7: tracker.stop() is idempotent — calling it in both the
+        normal path and the except block is safe.
+        """
+        self.session.add_message("user", user_input)
+
+        # FIX #2: build message history from prior turns
+        messages: List[types.Content] = []
+        for msg in self.session.history[:-1]:   # exclude current turn
+            role = "user" if msg["role"] == "user" else "model"
+            messages.append(
+                types.Content(role=role,
+                              parts=[types.Part(text=msg["content"])])
+            )
+        messages.append(
+            types.Content(role="user",
+                          parts=[types.Part(text=user_input)])
+        )
+
+        # FIX #3: single tracker for the full request lifecycle
+        tracker = StatusTracker()
+        tracker.start()
+
+        try:
+            for iteration in range(self.max_iterations):
+
+                response = self.client.models.generate_content(
+                    model=self.MODEL,
+                    contents=messages,
+                    config=self._config,   # FIX #4: cached config
+                )
+
+                if response is None or response.usage_metadata is None:
+                    tracker.stop()
+                    self.ui.error("Response Error",
+                                  "Response is malformed or empty")
+                    if self.logger:
+                        self.logger.error("Malformed response from API")
+                    return
+
+                tracker.update_tokens(
+                    prompt     = response.usage_metadata.prompt_token_count or 0,
+                    completion = response.usage_metadata.candidates_token_count or 0,
+                )
+
+                if verbose:
+                    tracker.pause()
+                    self._display_verbose_info(iteration, response)
+                    tracker.resume()
+
+                if not response.candidates:
+                    continue
+
+                for candidate in response.candidates:
+                    if candidate and candidate.content:
+                        messages.append(candidate.content)
+
+                if response.function_calls:
+                    # FIX #3: pause display while printing tool output
+                    tracker.pause()
+
+                    for fc in response.function_calls:
+                        result_msg = call_function(fc, verbose)
+                        messages.append(result_msg)
+
+                        result_content = ""
+                        try:
+                            if (result_msg.parts and
+                                    result_msg.parts[0].function_response):
+                                result_content = (
+                                    result_msg.parts[0]
+                                    .function_response.response
+                                    .get("result", "")
+                                )
+                        except Exception:
+                            pass
+
+                        self.ui.print_tool_execution(
+                            fc.name, fc.args, result_content
+                        )
+
+                    tracker.resume()   # FIX #3: back to inference display
+
+                else:
+                    # Terminal text response
+                    tracker.stop()
+                    response_text = response.text
+                    self.session.add_message("assistant", response_text)
+                    self.ui.success("SDX Agent Response", response_text)
+                    if self.logger:
+                        self.logger.info("Request processed successfully")
+                    return
+
+            # for-else: max iterations hit
+            tracker.stop()
+            self.ui.warning(
+                "Max Iterations Reached",
+                f"Reached maximum iterations ({self.max_iterations}). "
+                "Task may require more steps."
+            )
+            if self.logger:
+                self.logger.warning(
+                    f"Max iterations reached for: {user_input[:50]}..."
+                )
+
+        except KeyboardInterrupt:
+            tracker.stop()   # FIX #7: idempotent
+            self.ui.info("Interrupted", "Task interrupted by user")
+            if self.logger:
+                self.logger.info("Task interrupted by user (Ctrl+C)")
+
+        except Exception as e:
+            tracker.stop()   # FIX #7: idempotent
+            self.ui.error("Error Processing Request", str(e))
+            if self.logger:
+                self.logger.error(f"Error processing request: {e}")
+
+    def _display_verbose_info(self, iteration: int, response):
+        self.ui.info("Token Usage", (
+            f"Iteration: {iteration + 1}/{self.max_iterations}\n"
+            f"Prompt tokens: {response.usage_metadata.prompt_token_count}\n"
+            f"Candidate tokens: {response.usage_metadata.candidates_token_count}\n"
+            f"Total tokens: {response.usage_metadata.total_token_count}"
+        ))
+
+    # ── interactive loop ─────────────────────────────────────────────────────
+
+    def run_interactive(self):
+        self.ui.welcome_screen()
+        if self.logger:
+            self.logger.info("SDX Agent started")
+
+        while True:
+            try:
+                user_input = self.prompt_session.prompt(
+                    [('class:prompt', '→ ')],
+                    style=PromptStyle.from_dict({'prompt': Theme.GREEN})
+                ).strip()
+
+                if not user_input:
+                    continue
+
+                if self.command_handler.is_command(user_input):
+                    result = self.command_handler.handle(user_input)
+                    if result == "EXIT":
+                        self.ui.info("Goodbye", "👋 Happy coding! Session saved.")
+                        if self.logger:
+                            self.logger.info("Agent session ended gracefully")
+                        break
+                    elif result == "RELOAD":
+                        self.ui.info("Reloading", "♻ Restarting SDX Agent...")
+                        if self.logger:
+                            self.logger.info("Reloading via /reload")
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
+                    elif result:
+                        self.ui.console.print(
+                            f"[{Theme.CYAN}]{result}[/{Theme.CYAN}]\n"
+                        )
+                    continue
+
+                verbose_flag = '--verbose' in user_input
+                if verbose_flag:
+                    user_input = user_input.replace('--verbose', '').strip()
+
+                self.ui.separator()
+                self.process_request(user_input, verbose_flag)
+                self.ui.separator()
+                self.ui.console.print()
+
+            except KeyboardInterrupt:
+                self.ui.info("Interrupted", "Session interrupted. Goodbye! 👋")
+                if self.logger:
+                    self.logger.info("Session interrupted by user")
+                break
+            except EOFError:
+                self.ui.info("Goodbye", "👋 Happy coding! Session saved.")
+                if self.logger:
+                    self.logger.info("Session ended (EOF)")
+                break
+            except Exception as e:
+                self.ui.error("Unexpected Error", str(e))
+                if self.logger:
+                    self.logger.error(
+                        f"Unexpected error in interactive loop: {e}",
+                        exc_info=True
+                    )
+
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
+
+def main():
+    load_dotenv()
+
+    # FIX #6: logger created FIRST — never None anywhere else
+    log = Logger()
+    log.info("SDX Agent initializing...")
+
+    try:
+        agent = SDXAgent(log=log)
+        agent.run_interactive()
+
+    except ValueError as e:
+        console = Console()
+        console.print(f"[bold {Theme.RED}]✗ Configuration Error[/bold {Theme.RED}]")
+        console.print(
+            f"[{Theme.YELLOW}]Please create a .env file with:[/{Theme.YELLOW}]\n"
+            "  GEMINI_API_KEY=your_api_key_here"
+        )
+        log.error(str(e))
+        sys.exit(1)
+
+    except Exception as e:
+        Console().print(f"[bold {Theme.RED}]✗ Fatal Error: {e}[/bold {Theme.RED}]")
+        log.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
